@@ -24,13 +24,12 @@ def run_input_file(input_file):
     sql_array = sql_array.split('\n')
     # Removes leading and trailing white space
     sql_array = [x.strip() for x in sql_array]
-    sql_array.remove('')
+    sql_array = [x for x in sql_array if x != '']
 
     database = ''
 
     for command in sql_array:
         print(f'Command entered: {command}')
-        command = command.lower()
 
         try:
             database = sql.execute_command(command, database)
@@ -58,7 +57,7 @@ def run_standard_input():
         # Continues accepting input until a semicolon is inputted or the input is exit
         command = ''
         while(';' not in command and command != 'exit'):
-            new_line = input('--> ').lower()
+            new_line = input('--> ')
             command += ' ' + new_line
             command = command.strip()
 

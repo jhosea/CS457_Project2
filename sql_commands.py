@@ -3,6 +3,8 @@ import shutil
 import json
 
 import pandas as pd
+import numpy as np
+import operator
 
 DATABASE_DIR = 'databases'
 
@@ -10,7 +12,29 @@ class Invalid_Command(Exception):
     '''Exception for when a command is invalid'''
     pass
 
-def create(command, database):
+
+def format_values(value):
+    '''
+    This function takes in a string and formats it correctly as a string, float, or int.
+
+    Returns: value with correct datatype
+    '''
+    # Looks for quotes and removes them - keeps as string
+    if "'" in value:
+        value = value[value.find("'")+1:value.rfind("'")]
+    
+    # If no quotes assumes numnber and checks for period then converts to float
+    elif '.' in value:
+        value = float(value)
+
+    # If no period, converts to int
+    else:
+        value = int(value)
+    
+    return value
+
+
+def create(command, database, **kwargs):
     '''
     Function checks if we are creating a table or database and returns corresponding function
     '''
@@ -26,7 +50,8 @@ def create(command, database):
     else:
         raise Invalid_Command('Can only create a database or table.\n')
 
-def drop(command, database):
+
+def drop(command, database, **kwargs):
     '''
     Function checks if we are dropping a table or database and returns corresponding function
     '''
@@ -42,7 +67,8 @@ def drop(command, database):
     else:
         raise Invalid_Command('Can only drop a database or table.\n')
 
-def create_database(command, database):
+
+def create_database(command, database, **kwargs):
     '''
     Function checks if the main databases directory exists and creates it if not.
     Then creates a folder for the specified data database
@@ -64,13 +90,20 @@ def create_database(command, database):
 
     return database
 
-def create_table(command, database):
+
+def create_table(command, database, **kwargs):
     '''
     Function checks if the table exists and creates the table (stores as csv) and schema (stores as json)
 
     Returns: database name
     '''
+
+    if database == '':
+        raise Invalid_Command('No database specified.\n')
+    
     table_name = command[2]
+    if '(' in table_name:
+        table_name = table_name.split('(')[0]
     table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
 
     # Checks if table exists
@@ -87,8 +120,12 @@ def create_table(command, database):
         # Loops through each column and extracts the name and data type and store them in table_schema dict
         for col in command_schema:
             col = col.strip()
-            col_name = col.split(' ')[0]
-            col_type = col.split(' ')[1]
+            try:
+                col_name = col.split(' ')[0]
+                col_type = col.split(' ')[1]
+
+            except IndexError:
+                raise Invalid_Command('No column type provided.\n')
             table_schema[col_name] = col_type
 
         # Creates empty dataframe with specified columns
@@ -110,7 +147,7 @@ def create_table(command, database):
     return database
 
 
-def drop_database(command, database):
+def drop_database(command, database, **kwargs):
     '''
     Function checks if databases exists and deletes it.
 
@@ -129,7 +166,7 @@ def drop_database(command, database):
     return database
 
 
-def drop_table(command, database):
+def drop_table(command, database, **kwargs):
     '''
     Function checks if table exists and deletes it.
 
@@ -168,12 +205,13 @@ def use_database(command,**kwargs):
         raise Invalid_Command(f'Could not find database {database_name}.\n')
 
 
-def select_command(command, database):
+def select_command(command, database, raw_command, **kwargs):
     '''
     Function checks if the table exists then selects the columns specified
 
     Returns: database name
     '''
+
     if not database:
         raise Invalid_Command('Not database selected.\n')
     if len(command) < 4:
@@ -183,19 +221,31 @@ def select_command(command, database):
         return_cols = command[command.index('select')+1:command.index('from')]
     except ValueError:
         raise Invalid_Command('No SELECT or FROM found in command.\n')
-    table = command[command.index('from')+1:]
+    table_name = command[command.index('from')+1]
+    
 
     # Creates table and schema path
-    table_path = os.path.join(DATABASE_DIR,database,f'{table[0]}.csv')
-    schema_path = os.path.join(DATABASE_DIR,database,f'{table[0]}_schema.json')
+    table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
+    schema_path = os.path.join(DATABASE_DIR,database,f'{table_name}_schema.json')
 
     # Checks if table exists
     if os.path.isfile(table_path) & os.path.isfile(schema_path):
-        table = pd.read_csv(table_path)
+        table_df = pd.read_csv(table_path)
+
+        # Runs if there was a where command
+        where_command = raw_command[raw_command.lower().find('where'):]
+        if 'where' in where_command.lower():
+            where_command = where_command.replace(';','').split(' ')
+            where_command = [x.strip() for x in where_command]
+            where_command = [x for x in where_command if x != '']
+        
+            filter_series = where(where_command=where_command, table_df=table_df)
+
+            table_df = table_df.loc[filter_series]
 
         # Returns all columns if *
         if return_cols == ['*']:
-            print(table, '\n')
+            print(table_df, '\n')
 
         # Else split columns with comma and create a list of column names
         else:
@@ -204,20 +254,21 @@ def select_command(command, database):
             return_cols = [x.strip() for x in return_cols]
 
             # Checks if all columns exist
-            if all(col_name in table.columns for col_name in return_cols):
+            if all(col_name in table_df.columns for col_name in return_cols):
 
                 # Prints all selected columns
-                print(table[return_cols], '\n')
+                print(table_df[return_cols], '\n')
             else:
                 raise Invalid_Command(f'Table at least one specified column was not found.\n')
     # Raises error if table not found
     else:
-        raise Invalid_Command(f'Table {table[0]} not found.\n')
+        raise Invalid_Command(f'Table {table_df[0]} not found.\n')
 
     # Returns database so we can continue using it
     return database
 
-def alter_table(command, database):
+
+def alter_table(command, database, **kwargs):
     '''
     Function adds or removes one column from the table.
     First checks if the table exists then calls the add or remove function.
@@ -262,7 +313,7 @@ def alter_table(command, database):
     return database
 
 
-def add_to_table(table_path, schema_path, column_name, column_type):
+def add_to_table(table_path, schema_path, column_name, column_type, **kwargs):
     '''
     This function checks if a column exists and if not adds the column to the table and schema.
 
@@ -278,7 +329,7 @@ def add_to_table(table_path, schema_path, column_name, column_type):
         schema = json.load(f)
 
     # Adds new column to table and saves table to csv
-    table[column_name] = ''
+    table[column_name] = np.nan
     table.to_csv(table_path, index = False)
 
     # Adds new column to schema and saves to json
@@ -288,7 +339,8 @@ def add_to_table(table_path, schema_path, column_name, column_type):
 
     return None
 
-def remove_from_table(table_path, schema_path, column_name):
+
+def remove_from_table(table_path, schema_path, column_name, **kwargs):
     '''
     This function checks if a column exists and if so deletes the column to the table and schema.
 
@@ -315,6 +367,212 @@ def remove_from_table(table_path, schema_path, column_name):
     return None
 
 
+def insert(command, database, raw_command, **kwargs):
+    '''
+    This function inserts values to a specified table.
+
+    Returns: database name
+    '''
+
+    # Checks for database and INTO keyword
+    if database == '':
+        raise Invalid_Command('No database specified.\n')
+
+    if command[1] != 'into':
+        raise Invalid_Command('Missing "INTO" keyword.\n')
+    
+    # Gets table name and path
+    table_name = command[2]
+    table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
+
+    # Checks if table exists
+    if os.path.isfile(table_path):
+
+        # Looks for values keyword
+        try:
+            values_to_insert = raw_command[raw_command.find('values'):]
+        
+        except:
+            raise Invalid_Command('Could not find keyword "VALUES".\n')
+
+        # Extracts values to insert and splits on comma
+        values_to_insert = values_to_insert[values_to_insert.find('(')+1:values_to_insert.rfind(')')].split(',')
+
+        # Checks for quote or period to indicate value is a float or a string. Else will be converted to an int.
+        formatted_values = list()
+        for value in values_to_insert:
+            # Correcly formats value and appends it
+            formatted_values.append(format_values(value))
+
+        # Reads table, adds new row and saves back in csv
+        table_df = pd.read_csv(table_path)
+
+        table_df.loc[table_df.index.max()+1] = formatted_values
+
+        table_df.to_csv(table_path, index = False)
+
+
+    # If the table already exists raise exception
+    else:
+        raise Invalid_Command(f'Failed to insert. Table {table_name} could not be found.\n')
+
+    print(f'1 new record inserted into table {table_name}.\n')
+
+    # Returns database so we can continue using it
+    return database
+
+
+def delete(command, database, raw_command, **kwargs):
+    '''
+    This function rows from a specified table.
+
+    Returns: database name
+    '''
+    print(command)
+    # Checks for database and INTO keyword
+    if database == '':
+        raise Invalid_Command('No database specified.\n')
+
+    if command[1] != 'from':
+        raise Invalid_Command('Missing "FROM" keyword.\n')
+    
+    # Gets table name and path
+    table_name = command[2]
+    table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
+
+    # Checks if table exists
+    if os.path.isfile(table_path):
+
+        # Reads table
+        table_df = pd.read_csv(table_path)
+
+        # Splits raw command on where, removes semicolon, splits on space, removes whitespace, and drops empty elements
+        where_command = raw_command[raw_command.lower().find('where'):]
+
+        # Runs if there was a where command
+        if 'where' in where_command.lower():
+            where_command = where_command.replace(';','').split(' ')
+            where_command = [x.strip() for x in where_command]
+            where_command = [x for x in where_command if x != '']
+        
+            filter_series = where(where_command=where_command, table_df=table_df)
+
+            table_df.drop(table_df.loc[filter_series].index, inplace=True)
+
+            print(f'Deleted {sum(filter_series)} records.\n')
+
+        # If no where command entire table is deleted
+        else:
+            table_df.drop(table_df.index, inplace=True)
+            print(f'Deleted all records.\n')
+
+        # Saves new table
+        table_df.to_csv(table_path, index = False)
+
+
+    # If the table already exists raise exception
+    else:
+        raise Invalid_Command(f'Failed to insert. Table {table_name} could not be found.\n')
+    
+
+    # Returns database so we can continue using it
+    return database
+
+
+def where(where_command, table_df):
+    '''
+    This function returns DataFrame after applying the where condition.
+
+    Where condition formatted as: ['WHERE','{column_name}', '{comparison operator}', '{value}'] eg. 'WHERE','a', '=', '2']
+
+    Returns: boolean series to filter df
+    '''
+
+    operator_dict = {
+        '=': operator.eq,
+        '!=': operator.ne,
+        '<': operator.lt,
+        '<=': operator.le,
+        '>': operator.gt,
+        '>=': operator.ge,
+    }
+
+    column = where_command[1].lower()
+    comparison = where_command[2]
+    comparison_function = operator_dict[comparison]
+    value = format_values(where_command[3])
+
+    if column in table_df.columns:
+
+        if comparison in operator_dict:
+            filter_series = comparison_function(table_df[column],value)
+        else:
+            raise Invalid_Command('No matching comparison operator found.')
+
+    return filter_series
+
+
+def update_table(command, database, raw_command, **kwargs):
+    '''
+    This function updates values in a specified table using a WHERE statment.
+
+    Returns: database
+    '''
+
+    # Checks for database and INTO keyword
+    if database == '':
+        raise Invalid_Command('No database specified.\n')
+    
+    # Gets table name and path
+    table_name = command[1]
+    table_path = os.path.join(DATABASE_DIR,database,f'{table_name}.csv')
+
+    # Checks if table exists
+    if os.path.isfile(table_path):
+
+        table_df = pd.read_csv(table_path)
+
+        # Splits raw command on where, removes semicolon, splits on space, removes whitespace, and drops empty elements
+        where_command = raw_command[raw_command.lower().find('where'):]
+        # Runs if there was a where command
+        if 'where' in where_command.lower():
+            where_command = where_command.replace(';','').split(' ')
+            where_command = [x.strip() for x in where_command]
+            where_command = [x for x in where_command if x != '']
+        
+            filter_series = where(where_command=where_command, table_df=table_df)
+
+
+        # Subsets to the set statement
+        set_command = raw_command[raw_command.lower().find('set'):raw_command.lower().find('where')]
+        if 'set' in set_command.lower():
+            # Splits on spaces, strips, and removes empty elements
+            set_command = set_command.split(' ')
+            set_command = [x.strip() for x in set_command]
+            set_command = [x for x in set_command if x != '']
+
+            # Selects column and formats value
+            column = set_command[1].lower()
+            value = format_values(set_command[3])
+
+            if column in table_df.columns:
+                
+                # Sets value
+                table_df.loc[filter_series,column] = value
+
+                table_df.to_csv(table_path, index = False)
+
+                print(f'Modified {sum(filter_series)} records.\n')
+
+            else:
+                raise Invalid_Command("Column not found.\n")
+
+    else:
+        raise Invalid_Command("Table not found.\n")
+
+    return database
+
+
 def execute_command(command, database):
     '''
     This function executes one sql command. It first checks for a semi-colon and then
@@ -322,6 +580,12 @@ def execute_command(command, database):
 
     Returns: database_name
     '''
+
+    # Creates copy of original command
+    raw_command = command
+
+    command = command.lower()
+
     # Checks if command includes semi-colon and raises error if not
     if ';' in command:
         command = command.replace(';','')
@@ -342,7 +606,7 @@ def execute_command(command, database):
         raise Invalid_Command(f'{command_type} is not a valid SQL command.\n')
 
     # Runs matching command function
-    database = command_function(command=command, database=database)
+    database = command_function(command=command, database=database, raw_command=raw_command)
 
     return database
 
@@ -353,5 +617,8 @@ command_dict = {
     'drop': drop,
     'use': use_database,
     'select': select_command,
-    'alter': alter_table
+    'alter': alter_table,
+    'insert': insert,
+    'update': update_table,
+    'delete': delete
 }
