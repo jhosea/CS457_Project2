@@ -428,7 +428,6 @@ def delete(command, database, raw_command, **kwargs):
 
     Returns: database name
     '''
-    print(command)
     # Checks for database and INTO keyword
     if database == '':
         raise Invalid_Command('No database specified.\n')
